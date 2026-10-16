@@ -1,4 +1,4 @@
-# Automate-UAlbany-SSO-Automate
+# Automate UAlbany SSO
 UAlbany login SSO automation ( for use with Tampermonkey )
 
 UAlbany’s SSO and EZProxy login flow is a textbook UX anti-pattern. Between rapid cross-domain redirects, aggressive session timeouts, and zero dark-mode support across Shibboleth and Duo Security, researchers are constantly subjected to blinding white screen flashes (FOUC) and repetitive login clicks just to open a PDF via EZProxy.
