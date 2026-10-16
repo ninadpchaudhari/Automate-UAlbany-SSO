@@ -1,0 +1,232 @@
+// ==UserScript==
+// @name         UAlbany EZProxy All-in-One (Tampermonkey Native)
+// @namespace    http://tampermonkey.net/
+// @version      4.2
+// @description  0ms SSO login, dark-mode screen cloaking, Duo auto-trust, and GM_xmlhttpRequest keep-alive
+// @author       Ninad
+// @match        https://*.albany.edu/*
+// @match        https://albany.edu/*
+// @match        https://*.libproxy.albany.edu/*
+// @match        https://*.duosecurity.com/*
+// @match        https://scholar.google.com/*
+// @match        https://dl.acm.org/*
+// @match        https://ieeexplore.ieee.org/*
+// @match        https://arxiv.org/*
+// @match        https://link.springer.com/*
+// @match        https://www.sciencedirect.com/*
+// @run-at       document-start
+// @connect      libproxy.albany.edu
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_xmlhttpRequest
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const isAlbanyDomain = location.hostname === 'albany.edu' || location.hostname.endsWith('.albany.edu');
+    const isDuoDomain = location.hostname.endsWith('.duosecurity.com');
+
+    // =========================================================================
+    // 1. CREDENTIAL STORAGE & TAMPERMONKEY MENU COMMANDS
+    // =========================================================================
+    function promptForCredentials() {
+        const currentId = GM_getValue('ualbany_netid', '');
+        const netid = prompt('UAlbany Auto-Login: Enter your NetID:', currentId);
+        if (netid !== null && netid.trim() !== '') {
+            const pass = prompt('UAlbany Auto-Login: Enter your Password:', '');
+            if (pass !== null && pass !== '') {
+                GM_setValue('ualbany_netid', netid.trim());
+                GM_setValue('ualbany_pass', pass);
+                alert('UAlbany credentials saved! Auto-login is now active.');
+                return { netid: netid.trim(), pass };
+            }
+        }
+        return { netid: '', pass: '' };
+    }
+
+    function getCredentials() {
+        let netid = GM_getValue('ualbany_netid', '');
+        let pass = GM_getValue('ualbany_pass', '');
+        if (!netid || !pass) {
+            return promptForCredentials();
+        }
+        return { netid, pass };
+    }
+
+    GM_registerMenuCommand('Set / Update UAlbany Credentials', () => {
+        promptForCredentials();
+        if (isAlbanyDomain) attemptAutoLogin();
+    });
+
+    GM_registerMenuCommand('Clear UAlbany Credentials', () => {
+        GM_setValue('ualbany_netid', '');
+        GM_setValue('ualbany_pass', '');
+        alert('UAlbany credentials cleared!');
+    });
+
+    // =========================================================================
+    // 2. DARK-MODE CLOAKING (Only on UAlbany Auth / Redirect / Duo pages)
+    // =========================================================================
+    const isAuthRedirectPage =
+        (location.hostname === 'libproxy.albany.edu' && location.pathname.includes('/login')) ||
+        (isAlbanyDomain && (
+            location.href.includes('shibboleth') ||
+            location.href.includes('idp') ||
+            location.hostname === 'login.albany.edu' ||
+            location.hostname === 'sso.albany.edu'
+        )) ||
+        isDuoDomain;
+
+    if (isAuthRedirectPage) {
+        const cloak = document.createElement('style');
+        cloak.id = 'ualbany-dark-cloak';
+        cloak.textContent = `
+            html, body {
+                background-color: #121212 !important;
+                color: #888 !important;
+                transition: none !important;
+            }
+            body > *:not(#ualbany-cloak-banner) {
+                opacity: 0.08 !important;
+                filter: grayscale(100%) !important;
+            }
+            #ualbany-cloak-banner {
+                opacity: 1 !important;
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                font-family: system-ui, -apple-system, sans-serif;
+                font-size: 14px;
+                color: #b0b0b0;
+                background: #1e1e1e;
+                padding: 12px 24px;
+                border-radius: 8px;
+                border: 1px solid #333;
+                z-index: 2147483647;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            }
+        `;
+
+        if (document.documentElement) {
+            document.documentElement.appendChild(cloak);
+        }
+
+        const injectBanner = () => {
+            if (document.body && !document.getElementById('ualbany-cloak-banner')) {
+                const banner = document.createElement('div');
+                banner.id = 'ualbany-cloak-banner';
+                banner.textContent = isDuoDomain
+                    ? 'Verifying Duo token...'
+                    : 'Authenticating via UAlbany SSO...';
+                document.body.appendChild(banner);
+
+                setTimeout(() => {
+                    cloak.remove();
+                    banner.remove();
+                }, 4500);
+            }
+        };
+
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', injectBanner);
+        } else {
+            injectBanner();
+        }
+    }
+
+    // =========================================================================
+    // 3. INSTANT AUTO-LOGIN (Runs strictly on *.albany.edu & *.duosecurity.com)
+    // =========================================================================
+    let isPrompting = false;
+
+    function attemptAutoLogin() {
+        if (isPrompting || !document.body) return false;
+
+        if (isAlbanyDomain) {
+            // --- STEP 1: Any UAlbany Landing Page ("UAlbany Login" button) ---
+            const step1Button = document.evaluate(
+                "//a[contains(text(), 'UAlbany Login')] | //button[contains(text(), 'UAlbany Login')]",
+                document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null
+            ).singleNodeValue;
+
+            if (step1Button && !step1Button.dataset.clicked) {
+                step1Button.dataset.clicked = 'true';
+                step1Button.click();
+                return true;
+            }
+
+            // --- STEP 2: UAlbany Shibboleth / SSO Login Form ---
+            const userField = document.getElementById('inputnetid');
+            const passField = document.getElementById('inputPassword');
+            const submitBtn = document.querySelector('button[name="_eventId_proceed"]');
+
+            if (userField && passField && submitBtn && !submitBtn.dataset.submitted) {
+                isPrompting = true;
+                const { netid, pass } = getCredentials();
+                isPrompting = false;
+
+                if (netid && pass) {
+                    submitBtn.dataset.submitted = 'true';
+                    userField.value = netid;
+                    passField.value = pass;
+                    userField.dispatchEvent(new Event('input', { bubbles: true }));
+                    passField.dispatchEvent(new Event('input', { bubbles: true }));
+                    userField.dispatchEvent(new Event('change', { bubbles: true }));
+                    passField.dispatchEvent(new Event('change', { bubbles: true }));
+                    submitBtn.click();
+                    return true;
+                }
+            }
+        }
+
+        // --- STEP 3: Duo Universal Prompt ("Trust this browser?" button) ---
+        if (isDuoDomain) {
+            const trustBtn = document.getElementById('trust-browser-button');
+            if (trustBtn && !trustBtn.dataset.clicked) {
+                trustBtn.dataset.clicked = 'true';
+                trustBtn.click();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    if (isAlbanyDomain || isDuoDomain) {
+        const loginPoll = setInterval(() => {
+            if (attemptAutoLogin()) {
+                clearInterval(loginPoll);
+            }
+        }, 100);
+        setTimeout(() => clearInterval(loginPoll), 15000);
+    }
+
+    // =========================================================================
+    // 4. SILENT BACKGROUND KEEP-ALIVE (Runs on all non-login whitelisted pages)
+    // =========================================================================
+    if (window.self === window.top && !isAuthRedirectPage) {
+        const KEEP_ALIVE_URL = 'https://libproxy.albany.edu/menu';
+        const PING_INTERVAL_MS = 10 * 60 * 1000; // Every 10 minutes
+
+        function pingEZProxy() {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: `${KEEP_ALIVE_URL}?_=${Date.now()}`,
+                anonymous: false,
+                onload: function(response) {
+                    const isStillLoggedIn = !response.finalUrl.includes('login') && !response.finalUrl.includes('idp');
+                    console.debug(
+                        `[UAlbany Keep-Alive] Pinged EZProxy (${new Date().toLocaleTimeString()}) - Session Active:`,
+                        isStillLoggedIn
+                    );
+                }
+            });
+        }
+
+        setTimeout(pingEZProxy, 10000);
+        setInterval(pingEZProxy, PING_INTERVAL_MS);
+    }
+})();
