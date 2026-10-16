@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      4.2
 // @description  0ms SSO login, dark-mode screen cloaking, Duo auto-trust, and GM_xmlhttpRequest keep-alive
-// @author       Ninad
+// @author       Ninad & Google Gemini
 // @match        https://*.albany.edu/*
 // @match        https://albany.edu/*
 // @match        https://*.libproxy.albany.edu/*
